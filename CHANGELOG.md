@@ -1,6 +1,57 @@
 Change Log
 ==========
 
+next version
+---------------------------
+
+ * Fix many crash & anr bug
+
+version 4.2.2 *(2014-4-4)*
+---------------------------
+
+ * `VideoView` support `AVOptions`.
+ * Improve seek operation.
+ * Fix `MediaPlayer` release slowly bug.
+
+version 4.2.1 *(2014-2-25)*
+---------------------------
+
+ * Support `setSurface`, you can use `SurfaceTexture` or `TextureView` render video.
+ * More `MediaMetadataRetriever` API, e.g. `getEmbeddedPicture`, more metadata support.
+ * Support with the cover of MP3 playback.
+ * Fix HLS multiple requests issue.
+ * Support gradle build project.
+
+version 4.2.0 *(2013-12-31)*
+---------------------------
+
+ * Support MIPS architecture.
+ * Customize FFmpeg, You can build FFmpeg by yourself.
+ * Improve hardware decoder, support more devices.
+ * Support HTTP Live Streaming download while playing.
+ * Support AES-128 encrypt for HTTP Live Streaming.
+ * Improve seek operation.
+ * Fix many bugs.
+
+
+version 4.1.1 *(2013-09-16)*
+---------------------------
+
+ * Improve hls playback.
+ * Videoview support avoptions.
+ * Support videoview switching rgb\_565 or rgba\_8888 to video rendering.
+ * Fix other bug.
+
+Version 4.1.0 *(2013-08-30)*
+---------------------------
+
+ * Support full version, online version.
+ * Support x86 hardware.
+ * Improve hardware decoder.
+ * Improve adaptive bitrate streaming.
+ * Support most FFmpeg AVOptions, e.g. support rtmp AVOptions.
+ * Improve MediaPlayer API, e.g. support playback segment video list.
+
 Version 4.0.1 *(2013-07-22)*
 ---------------------------
 
@@ -31,5 +82,5 @@ Version 3.0.0 *(2012-10-23)*
 ----------------------------
 
  * Support ARMV6+.
- * Supportn package it into your application without the need to
+ * Support package it into your application without the need to
    let users download a seperated Vitamio Plugin.

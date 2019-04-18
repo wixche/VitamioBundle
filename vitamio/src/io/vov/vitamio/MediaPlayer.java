@@ -33,6 +33,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.Message;
 import android.os.PowerManager;
+import android.text.TextUtils;
 import android.util.SparseArray;
 import android.view.Surface;
 import android.view.SurfaceHolder;
@@ -40,7 +41,9 @@ import android.view.SurfaceHolder;
 import io.vov.vitamio.utils.FileUtils;
 import io.vov.vitamio.utils.Log;
 
+import java.io.File;
 import java.io.FileDescriptor;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.nio.ByteBuffer;
@@ -59,12 +62,24 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public class MediaPlayer {
   public static final int CACHE_TYPE_NOT_AVAILABLE = 1;
-  public static final int CACHE_TYPE_UPDATE = 2;
-  public static final int CACHE_TYPE_SPEED = 3;
+  public static final int CACHE_TYPE_START = 2;
+  public static final int CACHE_TYPE_UPDATE = 3;
+  public static final int CACHE_TYPE_SPEED = 4;
+  public static final int CACHE_TYPE_COMPLETE = 5;
   public static final int CACHE_INFO_NO_SPACE = 1;
   public static final int CACHE_INFO_STREAM_NOT_SUPPORT = 2;
   public static final int MEDIA_ERROR_UNKNOWN = 1;
   public static final int MEDIA_ERROR_NOT_VALID_FOR_PROGRESSIVE_PLAYBACK = 200;
+  
+  /** File or network related operation errors. */
+  public static final int MEDIA_ERROR_IO = -5;
+  /** Bitstream is not conforming to the related coding standard or file spec. */
+  public static final int MEDIA_ERROR_MALFORMED = -1007;
+  /** Bitstream is conforming to the related coding standard or file spec, but
+   * the media framework does not support the feature. */
+  public static final int MEDIA_ERROR_UNSUPPORTED = -1010;
+  /** Some operation takes too long to complete, usually more than 3-5 seconds. */
+  public static final int MEDIA_ERROR_TIMED_OUT = -110;
   /**
    * The video is too complex for the decoder: it can't decode frames fast
    * enough. Possibly only the audio plays fine at this stage.
@@ -110,7 +125,7 @@ public class MediaPlayer {
   /**
    * The external subtitle types which Vitamio supports.
    */
-  public static final String[] SUB_TYPES = {".srt", ".ssa", ".smi", ".txt", ".sub", ".ass"};
+  public static final String[] SUB_TYPES = {".srt", ".ssa", ".smi", ".txt", ".sub", ".ass", ".webvtt"};
   private static final int MEDIA_NOP = 0;
   private static final int MEDIA_PREPARED = 1;
   private static final int MEDIA_PLAYBACK_COMPLETE = 2;
@@ -140,6 +155,8 @@ public class MediaPlayer {
   private boolean mScreenOnWhilePlaying;
   private boolean mStayAwake;
   private Metadata mMeta;
+  private TrackInfo[] mInbandTracks;
+  private TrackInfo mOutOfBandTracks;
   private AssetFileDescriptor mFD = null;
   private OnHWRenderFailedListener mOnHWRenderFailedListener;
   private OnPreparedListener mOnPreparedListener;
@@ -162,7 +179,7 @@ public class MediaPlayer {
   private Surface mLocalSurface;
   private Bitmap mBitmap;
   private ByteBuffer mByteBuffer;
-
+  
   /**
    * Default constructor. The same as Android's MediaPlayer().
    * <p>
@@ -191,8 +208,8 @@ public class MediaPlayer {
     String LIB_ROOT = Vitamio.getLibraryPath();
     if (preferHWDecoder) {
       if (!NATIVE_OMX_LOADED.get()) {
-        if (Build.VERSION.SDK_INT > 15)
-          loadOMX_native(LIB_ROOT + "libOMX.16.so");
+        if (Build.VERSION.SDK_INT > 17)
+          loadOMX_native(LIB_ROOT + "libOMX.18.so");
         else if (Build.VERSION.SDK_INT > 13)
           loadOMX_native(LIB_ROOT + "libOMX.14.so");
         else if (Build.VERSION.SDK_INT > 10)
@@ -202,7 +219,11 @@ public class MediaPlayer {
         NATIVE_OMX_LOADED.set(true);
       }
     } else {
-      unloadOMX_native();
+      try {
+        unloadOMX_native();
+      } catch (UnsatisfiedLinkError e) {
+        Log.e("unloadOMX failed %s", e.toString());
+      }
       NATIVE_OMX_LOADED.set(false);
     }
 
@@ -240,7 +261,7 @@ public class MediaPlayer {
       Log.e("Error loading libs", e);
     }
   }
-
+ 
   private static void postEventFromNative(Object mediaplayer_ref, int what, int arg1, int arg2, Object obj) {
     MediaPlayer mp = (MediaPlayer) (mediaplayer_ref);
     if (mp == null)
@@ -262,7 +283,7 @@ public class MediaPlayer {
 
   private static native boolean loadFFmpeg_native(String ffmpegPath);
 
-  private native void _setVideoSurface();
+  private native void _setVideoSurface(Surface surface);
 
   /**
    * Sets the SurfaceHolder to use for displaying the video portion of the
@@ -277,7 +298,7 @@ public class MediaPlayer {
     } else {
       mSurfaceHolder = sh;
       mSurface = sh.getSurface();
-      _setVideoSurface();
+      _setVideoSurface(mSurface);
       updateSurfaceScreenOn();
     }
   }
@@ -294,7 +315,7 @@ public class MediaPlayer {
     } else {
       mSurfaceHolder = null;
       mSurface = surface;
-      _setVideoSurface();
+      _setVideoSurface(mSurface);
       updateSurfaceScreenOn();
     }
   }
@@ -317,7 +338,7 @@ public class MediaPlayer {
    *                               form {@link #setDataSource(FileDescriptor)}.
    */
   public void setDataSource(String path) throws IOException, IllegalArgumentException, SecurityException, IllegalStateException {
-    _setDataSource(path, null);
+    _setDataSource(path, null, null);
   }
 
   /**
@@ -328,10 +349,10 @@ public class MediaPlayer {
    * @throws IllegalStateException if it is called in an invalid state
    */
   public void setDataSource(Context context, Uri uri) throws IOException, IllegalArgumentException, SecurityException, IllegalStateException {
-    setDataSource(context, uri, "");
+    setDataSource(context, uri, null);
   }
 
-  public void setDataSource(Context context, Uri uri, String headers) throws IOException, IllegalArgumentException, SecurityException, IllegalStateException {
+  public void setDataSource(Context context, Uri uri, Map<String, String> headers) throws IOException, IllegalArgumentException, SecurityException, IllegalStateException {
     if (context == null || uri == null)
       throw new IllegalArgumentException();
     String scheme = uri.getScheme();
@@ -350,27 +371,68 @@ public class MediaPlayer {
     } catch (Exception e) {
       closeFD();
     }
-    _setDataSource(uri.toString(), headers);
+    setDataSource(uri.toString(), headers);
   }
-
+  
   /**
-   * Sets the data source as a content Uri.
+   * Sets the data source (file-path or http/rtsp URL) to use.
    *
-   * @param context the Context to use when resolving the Uri
-   * @param uri     the Content URI of the data you want to play
-   * @param headers the headers to be sent together with the request for the data
+   * @param path the path of the file, or the http/rtsp URL of the stream you want to play
+   * @param headers the headers associated with the http request for the stream you want to play
    * @throws IllegalStateException if it is called in an invalid state
    */
-  public void setDataSource(Context context, Uri uri, Map<String, String> headers) throws IOException, IllegalArgumentException, SecurityException, IllegalStateException {
-    StringBuffer headerBuffer = null;
-    if (headers != null) {
-      headerBuffer = new StringBuffer();
-      for (Map.Entry<String, String> entry : headers.entrySet()) {
-        headerBuffer.append(entry.getKey()).append(":").append(entry.getValue()).append("\r\n");
+  public void setDataSource(String path, Map<String, String> headers)
+          throws IOException, IllegalArgumentException, SecurityException, IllegalStateException
+  {
+      String[] keys = null;
+      String[] values = null;
+
+      if (headers != null) {
+          keys = new String[headers.size()];
+          values = new String[headers.size()];
+
+          int i = 0;
+          for (Map.Entry<String, String> entry: headers.entrySet()) {
+              keys[i] = entry.getKey();
+              values[i] = entry.getValue();
+              ++i;
+          }
       }
-    }
-    setDataSource(context, uri, headerBuffer == null ? null : headerBuffer.toString());
-    return;
+      setDataSource(path, keys, values);
+  }
+  
+  /**
+   * Sets the data source (file-path or http/rtsp URL) to use.
+   *
+   * @param path the path of the file, or the http/rtsp URL of the stream you want to play
+   * @param keys   AVOption key
+   * @param values AVOption value
+   * @throws IllegalStateException if it is called in an invalid state
+   */
+	public void setDataSource(String path, String[] keys, String[] values) throws IOException, IllegalArgumentException, SecurityException, IllegalStateException {
+		final Uri uri = Uri.parse(path);
+		if ("file".equals(uri.getScheme())) {
+			path = uri.getPath();
+		}
+
+		final File file = new File(path);
+		if (file.exists()) {
+			FileInputStream is = new FileInputStream(file);
+			FileDescriptor fd = is.getFD();
+			setDataSource(fd);
+			is.close();
+		} else {
+			_setDataSource(path, keys, values);
+		}
+	}
+
+  /**
+   * Set the segments source url
+   * @param segments the array path of the url e.g. Segmented video list
+   * @param cacheDir e.g. getCacheDir().toString()
+   */
+  public void setDataSegments(String[] uris, String cacheDir) {
+  	_setDataSegmentsSource(uris, cacheDir);
   }
 
   public void setOnHWRenderFailedListener(OnHWRenderFailedListener l) {
@@ -382,10 +444,11 @@ public class MediaPlayer {
    *
    * @param path    the path of the file, or the http/rtsp/mms URL of the stream you
    *                want to play
-   * @param headers protocol headers, e.g. HTTP header
+   * @param keys   AVOption key
+   * @param values AVOption value
    * @throws IllegalStateException if it is called in an invalid state
    */
-  public native void _setDataSource(String path, String headers) throws IOException, IllegalArgumentException, IllegalStateException;
+  private native void _setDataSource(String path, String[] keys, String[] values) throws IOException, IllegalArgumentException, IllegalStateException;
 
   /**
    * Sets the data source (FileDescriptor) to use. It is the caller's
@@ -396,6 +459,13 @@ public class MediaPlayer {
    * @throws IllegalStateException if it is called in an invalid state
    */
   public native void setDataSource(FileDescriptor fd) throws IOException, IllegalArgumentException, IllegalStateException;
+  
+  /**
+   * Set the segments source url
+   * @param segments the array path of the url
+   * @param cacheDir e.g. getCacheDir().toString()
+   */
+  private native void _setDataSegmentsSource(String[] segments, String cacheDir);
 
   /**
    * Prepares the player for playback, synchronously.
@@ -559,7 +629,19 @@ public class MediaPlayer {
    * @return true if currently playing, false otherwise
    */
   public native boolean isPlaying();
-
+  
+  
+  /**
+   * Set whether cache the online playback file
+   * @param cache
+   */
+  public native void setUseCache(boolean cache);
+  
+  /**
+   * set cache file dir
+   * @param directory
+   */
+  public native void setCacheDirectory(String directory);
 
 	/**
    * Adaptive streaming support, default is false
@@ -666,7 +748,20 @@ public class MediaPlayer {
       mFD = null;
     }
   }
+  
+  /**
+   * Sets the player to be looping or non-looping.
+   *
+   * @param looping whether to loop or not
+   */
+  public native void setLooping(boolean looping);
 
+  /**
+   * Checks whether the MediaPlayer is looping or non-looping.
+   *
+   * @return true if the MediaPlayer is currently looping, false otherwise
+   */
+  public native boolean isLooping();
   /**
    * Amplify audio
    *
@@ -692,18 +787,45 @@ public class MediaPlayer {
    *         been added after any of the addTimedTextSource methods are called.
    */
   public TrackInfo[] getTrackInfo(String encoding) {
-    SparseArray<byte[]> trackSparse = new SparseArray<byte[]>();
-    if (!native_getTrackInfo(trackSparse)) {
-      return null;
-    }
+  	TrackInfo[] trackInfo = getInbandTrackInfo(encoding);
+    // add out-of-band tracks
+  	String timedTextPath = getTimedTextPath();
+  	if (TextUtils.isEmpty(timedTextPath)) {
+  		return trackInfo;
+  	}
+    TrackInfo[] allTrackInfo = new TrackInfo[trackInfo.length + 1];
+    System.arraycopy(trackInfo, 0, allTrackInfo, 0, trackInfo.length);
+    int i = trackInfo.length;
+    SparseArray<MediaFormat> trackInfoArray = new SparseArray<MediaFormat>();
+    MediaFormat mediaFormat = new MediaFormat();
+    mediaFormat.setString(MediaFormat.KEY_TITLE, timedTextPath.substring(timedTextPath.lastIndexOf("/")));
+    mediaFormat.setString(MediaFormat.KEY_PATH, timedTextPath);
+    SparseArray<MediaFormat> timedTextSparse = findTrackFromTrackInfo(TrackInfo.MEDIA_TRACK_TYPE_TIMEDTEXT, trackInfo);
+    if (timedTextSparse == null || timedTextSparse.size() == 0)
+    	trackInfoArray.put(timedTextSparse.keyAt(0), mediaFormat);
+    else 
+    	trackInfoArray.put(timedTextSparse.keyAt(timedTextSparse.size() - 1), mediaFormat);
+    mOutOfBandTracks = new TrackInfo(TrackInfo.MEDIA_TRACK_TYPE_SUBTITLE, trackInfoArray);
+    allTrackInfo[i] = mOutOfBandTracks;
+    return allTrackInfo;
+  }
+  
+  private TrackInfo[] getInbandTrackInfo(String encoding) {
+  	if (mInbandTracks == null) {
+  		SparseArray<byte[]> trackSparse = new SparseArray<byte[]>();
+      if (!native_getTrackInfo(trackSparse)) {
+        return null;
+      }
 
-    int size = trackSparse.size();
-    TrackInfo[] trackInfos = new TrackInfo[size];
-    for (int i = 0; i < size; i++) {
-      TrackInfo trackInfo = new TrackInfo(trackSparse.keyAt(i), parseTrackInfo(trackSparse.valueAt(i), encoding));
-      trackInfos[i] = trackInfo;
-    }
-    return trackInfos;
+      int size = trackSparse.size();
+      mInbandTracks = new TrackInfo[size];
+      for (int i = 0; i < size; i++) {
+      	SparseArray<MediaFormat> sparseArray = parseTrackInfo(trackSparse.valueAt(i), encoding);
+        TrackInfo trackInfo = new TrackInfo(trackSparse.keyAt(i), sparseArray);
+        mInbandTracks[i] = trackInfo;
+      }
+  	}
+    return mInbandTracks;
   }
 
   /**
@@ -715,8 +837,8 @@ public class MediaPlayer {
     return getTrackInfo(Charset.defaultCharset().name());
   }
 
-  private SparseArray<String> parseTrackInfo(byte[] tracks, String encoding) {
-    SparseArray<String> trackSparse = new SparseArray<String>();
+  private SparseArray<MediaFormat> parseTrackInfo(byte[] tracks, String encoding) {
+    SparseArray<MediaFormat> trackSparse = new SparseArray<MediaFormat>();
     String trackString;
     int trackNum;
     try {
@@ -727,11 +849,17 @@ public class MediaPlayer {
     }
     for (String s : trackString.split("!#!")) {
       try {
-        if (s.contains("."))
-          trackNum = Integer.parseInt(s.split("\\.")[0]);
-        else
-          trackNum = Integer.parseInt(s);
-        trackSparse.put(trackNum, s);
+      	MediaFormat mediaFormat = null;
+      	String[] formats = s.split("\\.");
+      	if (formats == null)
+      		continue;
+      	trackNum = Integer.parseInt(formats[0]);
+      	if (formats.length == 3) {
+      		mediaFormat = MediaFormat.createSubtitleFormat(formats[2], formats[1]);
+      	} else if (formats.length == 2) {
+      		mediaFormat = MediaFormat.createSubtitleFormat("", formats[1]);
+      	}
+        trackSparse.put(trackNum, mediaFormat);
       } catch (NumberFormatException e) {
       }
     }
@@ -744,7 +872,7 @@ public class MediaPlayer {
    * @param trackInfo
    * @return {@link TrackInfo#getTrackInfoArray()}
    */
-  public SparseArray<String> findTrackFromTrackInfo(int mediaTrackType, TrackInfo[] trackInfo) {
+  public SparseArray<MediaFormat> findTrackFromTrackInfo(int mediaTrackType, TrackInfo[] trackInfo) {
     for (int i = 0; i < trackInfo.length; i++) {
       if (trackInfo[i].getTrackType() == mediaTrackType) {
         return trackInfo[i].getTrackInfoArray();
@@ -779,7 +907,7 @@ public class MediaPlayer {
    * @see io.vov.vitamio.MediaPlayer#getTrackInfo
    */
   public void selectTrack(int index) {
-    selectOrDeselectTrack(index, true /* select */);
+  	selectOrDeselectBandTrack(index, true /* select */);
   }
 
   /**
@@ -796,9 +924,22 @@ public class MediaPlayer {
    * @see io.vov.vitamio.MediaPlayer#getTrackInfo
    */
   public void deselectTrack(int index) {
-    selectOrDeselectTrack(index, false /* select */);
+  	selectOrDeselectBandTrack(index, false /* select */);
   }
-
+  
+  private void selectOrDeselectBandTrack(int index, boolean select) {
+  	if (mOutOfBandTracks != null) {
+  		SparseArray<MediaFormat> mediaSparse = mOutOfBandTracks.getTrackInfoArray();
+  		int trackIndex = mediaSparse.keyAt(0);
+  		MediaFormat mediaFormat = mediaSparse.valueAt(0);
+    	if (index == trackIndex  && select) {
+    		addTimedTextSource(mediaFormat.getString(MediaFormat.KEY_PATH));
+    		return;
+    	}
+  	}
+  	selectOrDeselectTrack(index, select);
+  }
+  
   private native void selectOrDeselectTrack(int index, boolean select);
 
   @Override
@@ -972,7 +1113,7 @@ public class MediaPlayer {
   public native void setDeinterlace(boolean deinterlace);
 
   /**
-   * The buffer to fill before playback, default is 1024KB
+   * The buffer to fill before playback, default is 1024*1024 Byte 
    *
    * @param bufSize buffer size in Byte
    */
@@ -1081,8 +1222,7 @@ public class MediaPlayer {
   }
 
   private void audioTrackWrite(byte[] audioData, int offsetInBytes, int sizeInBytes) {
-    if (mAudioTrack != null) {
-      audioTrackStart();
+    if (mAudioTrack != null && mAudioTrack.getPlayState() == AudioTrack.PLAYSTATE_PLAYING) {
       int written;
       while (sizeInBytes > 0) {
         written = sizeInBytes > mAudioTrackBufferSize ? mAudioTrackBufferSize : sizeInBytes;
@@ -1110,6 +1250,10 @@ public class MediaPlayer {
       mAudioTrack.release();
     }
     mAudioTrack = null;
+  }
+  
+  public int getAudioSessionId() {
+	return mAudioTrack.getAudioSessionId();
   }
 
   private ByteBuffer surfaceInit() {
@@ -1205,6 +1349,17 @@ public class MediaPlayer {
      * @param speed the cached speed size kb/s
      */
     void onCachingSpeed(MediaPlayer mp, int speed);
+    
+    /**
+     * Cache start
+     * @param mp
+     */
+    void onCachingStart(MediaPlayer mp);
+    
+    /**  
+   	 * Cache compelete  
+   	 */  
+   	void onCachingComplete(MediaPlayer mp); 
 
     /**
      * Cache not available
@@ -1309,10 +1464,11 @@ public class MediaPlayer {
     public static final int MEDIA_TRACK_TYPE_VIDEO = 1;
     public static final int MEDIA_TRACK_TYPE_AUDIO = 2;
     public static final int MEDIA_TRACK_TYPE_TIMEDTEXT = 3;
+    public static final int MEDIA_TRACK_TYPE_SUBTITLE = 4;
     final int mTrackType;
-    final SparseArray<String> mTrackInfoArray;
+    final SparseArray<MediaFormat> mTrackInfoArray;
 
-    TrackInfo(int trackType, SparseArray<String> trackInfoArray) {
+    TrackInfo(int trackType, SparseArray<MediaFormat> trackInfoArray) {
       mTrackType = trackType;
       mTrackInfoArray = trackInfoArray;
     }
@@ -1330,9 +1486,9 @@ public class MediaPlayer {
     /**
      * Gets the track info
      *
-     * @return map trackIndex to string (e.g. "English", 3).
+     * @return map trackIndex to MediaFormat
      */
-    public SparseArray<String> getTrackInfoArray() {
+    public SparseArray<MediaFormat> getTrackInfoArray() {
       return mTrackInfoArray;
     }
   }
@@ -1410,6 +1566,10 @@ public class MediaPlayer {
               mOnCachingUpdateListener.onCachingUpdate(mMediaPlayer, msg.getData().getLongArray(MEDIA_CACHING_SEGMENTS));
             } else if (cacheType == CACHE_TYPE_SPEED) {
               mOnCachingUpdateListener.onCachingSpeed(mMediaPlayer, msg.getData().getInt(MEDIA_CACHING_INFO));
+            } else if (cacheType == CACHE_TYPE_START) {
+            	mOnCachingUpdateListener.onCachingStart(mMediaPlayer);
+            } else if (cacheType == CACHE_TYPE_COMPLETE) {
+            	mOnCachingUpdateListener.onCachingComplete(mMediaPlayer);
             }
           }
           return;

@@ -25,7 +25,7 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
 import android.view.WindowManager;
-import com.yixia.vitamio.library.R;
+
 import io.vov.vitamio.Vitamio;
 
 import java.lang.ref.WeakReference;
@@ -45,13 +45,13 @@ public class InitActivity extends Activity {
       protected void onPreExecute() {
         mPD = new ProgressDialog(InitActivity.this);
         mPD.setCancelable(false);
-        mPD.setMessage(InitActivity.this.getString(R.string.vitamio_init_decoders));
+        mPD.setMessage(InitActivity.this.getString(getResources().getIdentifier("vitamio_init_decoders", "string", getPackageName())));
         mPD.show();
       }
 
       @Override
       protected Boolean doInBackground(Object... params) {
-        return Vitamio.initialize(InitActivity.this);
+        return Vitamio.initialize(InitActivity.this, getResources().getIdentifier("libarm", "raw", getPackageName()));
       }
 
       @Override

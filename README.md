@@ -1,16 +1,7 @@
 Vitamio
 ===============
 
-Vitamio for Android
-
-
-Upgrade from 3.0
-----------------
-
-You don't need to change anything once 4.x is finally released. But if you want to use it right now, warnnings below:
-
-1. If you use RGBA\_8888 surface to render video, you use the VideoView from Vitamio, nothing to do. Otherwise, you must add `getHolder().setFormat(PixelFormat.RGBA_8888)` to your own VideoView. If you use RGB\_565 surface render video, you must add `getHolder().setFormat(PixelFormat.RGB_565)` and `setVideoChroma(MediaPlayer.VIDEOCHROMA_RGB565)`
-
+Vitamio is an open multimedia framework for Android and iOS, with full and real hardware accelerated decoder and renderer.
 
 
 New features
@@ -33,9 +24,16 @@ Only few important features are listed here, we have fix many bugs and may intro
 13. Enhance the hardware decoding in Android 16+.
 14. Support ARMV6 CPU, may have some bugs.
 
+How to use
+----------
+
+please see [the website](https://github.com/yixia/VitamioBundle/wiki)
 
 License
 -------
 
-Please refer [License](http://www.vitamio.org/en/License)
+Please see [License](http://www.vitamio.org/en/License)
 
+
+## Google+
+Vitamio Developers Community on Google+ [http://goo.gl/fhCDTD](http://goo.gl/fhCDTD)

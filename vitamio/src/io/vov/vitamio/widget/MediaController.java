@@ -18,9 +18,11 @@
 package io.vov.vitamio.widget;
 
 import android.annotation.SuppressLint;
+import android.annotation.TargetApi;
 import android.content.Context;
 import android.graphics.Rect;
 import android.media.AudioManager;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Message;
 import android.util.AttributeSet;
@@ -29,15 +31,15 @@ import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
+import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.ImageButton;
 import android.widget.PopupWindow;
-import android.widget.ProgressBar;
 import android.widget.SeekBar;
 import android.widget.SeekBar.OnSeekBarChangeListener;
 import android.widget.TextView;
 
-import com.yixia.vitamio.library.R;
+import java.lang.reflect.Method;
 
 import io.vov.vitamio.utils.Log;
 import io.vov.vitamio.utils.StringUtils;
@@ -81,7 +83,7 @@ public class MediaController extends FrameLayout {
   private int mAnimStyle;
   private View mAnchor;
   private View mRoot;
-  private ProgressBar mProgress;
+  private SeekBar mProgress;
   private TextView mEndTime, mCurrentTime;
   private TextView mFileName;
   private OutlineTextView mInfoView;
@@ -89,7 +91,7 @@ public class MediaController extends FrameLayout {
   private long mDuration;
   private boolean mShowing;
   private boolean mDragging;
-  private boolean mInstantSeeking = true;
+  private boolean mInstantSeeking = false;
   private boolean mFromXml = false;
   private ImageButton mPauseButton;
   private AudioManager mAM;
@@ -195,6 +197,19 @@ public class MediaController extends FrameLayout {
     mWindow.setOutsideTouchable(true);
     mAnimStyle = android.R.style.Animation;
   }
+  
+  @TargetApi(Build.VERSION_CODES.JELLY_BEAN)
+	public void setWindowLayoutType() {
+		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.ICE_CREAM_SANDWICH) {
+			try {
+				mAnchor.setSystemUiVisibility(View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION);
+				Method setWindowLayoutType = PopupWindow.class.getMethod("setWindowLayoutType", new Class[] { int.class });
+				setWindowLayoutType.invoke(mWindow, WindowManager.LayoutParams.TYPE_APPLICATION_ATTACHED_DIALOG);
+			} catch (Exception e) {
+				Log.e("setWindowLayoutType", e);
+			}
+		}
+	}
 
   /**
    * Set the view that acts as the anchor for the control view. This can for
@@ -221,29 +236,28 @@ public class MediaController extends FrameLayout {
    * @return The controller view.
    */
   protected View makeControllerView() {
-    return ((LayoutInflater) mContext.getSystemService(Context.LAYOUT_INFLATER_SERVICE)).inflate(R.layout.mediacontroller, this);
+    return ((LayoutInflater) mContext.getSystemService(Context.LAYOUT_INFLATER_SERVICE)).inflate(getResources().getIdentifier("mediacontroller", "layout", mContext.getPackageName()), this);
   }
 
   private void initControllerView(View v) {
-    mPauseButton = (ImageButton) v.findViewById(R.id.mediacontroller_play_pause);
+    mPauseButton = (ImageButton) v.findViewById(getResources().getIdentifier("mediacontroller_play_pause", "id", mContext.getPackageName()));
     if (mPauseButton != null) {
       mPauseButton.requestFocus();
       mPauseButton.setOnClickListener(mPauseListener);
     }
 
-    mProgress = (ProgressBar) v.findViewById(R.id.mediacontroller_seekbar);
+    mProgress = (SeekBar) v.findViewById(getResources().getIdentifier("mediacontroller_seekbar", "id", mContext.getPackageName()));
     if (mProgress != null) {
       if (mProgress instanceof SeekBar) {
         SeekBar seeker = (SeekBar) mProgress;
         seeker.setOnSeekBarChangeListener(mSeekListener);
-        seeker.setThumbOffset(1);
       }
       mProgress.setMax(1000);
     }
 
-    mEndTime = (TextView) v.findViewById(R.id.mediacontroller_time_total);
-    mCurrentTime = (TextView) v.findViewById(R.id.mediacontroller_time_current);
-    mFileName = (TextView) v.findViewById(R.id.mediacontroller_file_name);
+    mEndTime = (TextView) v.findViewById(getResources().getIdentifier("mediacontroller_time_total", "id", mContext.getPackageName()));
+    mCurrentTime = (TextView) v.findViewById(getResources().getIdentifier("mediacontroller_time_current", "id", mContext.getPackageName()));
+    mFileName = (TextView) v.findViewById(getResources().getIdentifier("mediacontroller_file_name", "id", mContext.getPackageName()));
     if (mFileName != null)
       mFileName.setText(mTitle);
   }
@@ -287,14 +301,6 @@ public class MediaController extends FrameLayout {
     mInfoView = v;
   }
 
-  private void disableUnsupportedButtons() {
-    try {
-      if (mPauseButton != null && !mPlayer.canPause())
-        mPauseButton.setEnabled(false);
-    } catch (IncompatibleClassChangeError ex) {
-    }
-  }
-
   /**
    * <p>
    * Change the animation style resource for this controller.
@@ -324,7 +330,6 @@ public class MediaController extends FrameLayout {
     if (!mShowing && mAnchor != null && mAnchor.getWindowToken() != null) {
       if (mPauseButton != null)
         mPauseButton.requestFocus();
-      disableUnsupportedButtons();
 
       if (mFromXml) {
         setVisibility(View.VISIBLE);
@@ -335,6 +340,7 @@ public class MediaController extends FrameLayout {
         Rect anchorRect = new Rect(location[0], location[1], location[0] + mAnchor.getWidth(), location[1] + mAnchor.getHeight());
 
         mWindow.setAnimationStyle(mAnimStyle);
+        setWindowLayoutType();
         mWindow.showAtLocation(mAnchor, Gravity.NO_GRAVITY, anchorRect.left, anchorRect.bottom);
       }
       mShowing = true;
@@ -448,9 +454,9 @@ public class MediaController extends FrameLayout {
       return;
 
     if (mPlayer.isPlaying())
-      mPauseButton.setImageResource(R.drawable.mediacontroller_pause_button);
+      mPauseButton.setImageResource(getResources().getIdentifier("mediacontroller_pause", "drawable", mContext.getPackageName()));
     else
-      mPauseButton.setImageResource(R.drawable.mediacontroller_play_button);
+      mPauseButton.setImageResource(getResources().getIdentifier("mediacontroller_play", "drawable", mContext.getPackageName()));
   }
 
   private void doPauseResume() {
@@ -467,7 +473,6 @@ public class MediaController extends FrameLayout {
       mPauseButton.setEnabled(enabled);
     if (mProgress != null)
       mProgress.setEnabled(enabled);
-    disableUnsupportedButtons();
     super.setEnabled(enabled);
   }
 
@@ -493,12 +498,6 @@ public class MediaController extends FrameLayout {
     boolean isPlaying();
 
     int getBufferPercentage();
-
-    boolean canPause();
-
-    boolean canSeekBackward();
-
-    boolean canSeekForward();
   }
 
 }
